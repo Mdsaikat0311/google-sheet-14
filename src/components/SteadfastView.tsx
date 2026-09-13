@@ -158,8 +158,8 @@ export const checkSteadfastEligibility = (order: Order) => {
   const mStatus = String(order.steadfastStatus || '').toLowerCase().trim();
   const isSentM = mStatus.includes('send to steadfast') || mStatus.includes('sent');
 
-  // Eligible for Ready for Delivery: Order has NO 9-digit tracking code AND NO courier status
-  const isEligible = !has9DigitTracking && !hasTrackingStatus;
+  // Eligible for Ready for Delivery: Order has NO 9-digit tracking code AND NO courier status AND has not yet been sent to Steadfast
+  const isEligible = !has9DigitTracking && !hasTrackingStatus && !isSentM;
 
   let excludeReason = '';
   if (has9DigitTracking && hasTrackingStatus) {
@@ -168,6 +168,8 @@ export const checkSteadfastEligibility = (order: Order) => {
     excludeReason = `K কলামে ৯ সংখ্যার ট্র্যাকিং কোড (${tracking}) বিদ্যমান`;
   } else if (hasTrackingStatus) {
     excludeReason = `L কলামে ট্র্যাকিং স্ট্যাটাস: ${order.courierStatus}`;
+  } else if (isSentM) {
+    excludeReason = `স্টেডফাস্টে পাঠানো হয়েছে (${order.steadfastStatus})`;
   }
 
   return {
@@ -282,23 +284,36 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
     }));
   }, [orders]);
 
+  // Helper to check if an order has been sent to Steadfast
+  const isOrderSentToSteadfast = (o: Order) => {
+    const m = String(o.steadfastStatus || '').toLowerCase().trim();
+    return m.includes('send to steadfast') || m === 'sent' || todaySentOrderIds.has(o.id);
+  };
+
   // Orders waiting for entry (Ready for Delivery):
-  // "READY FOR DELIVERY TA J GOLOTE TARACING 9 DIGIT CODE AND TRAKING KONO STATUS NEI SEGOLO OI LIST A ADD HOBE"
-  // Orders with NO 9-digit tracking code in Column K AND NO courier/tracking status in Column L
-  // If sent to Steadfast, but tracking code & status haven't arrived yet, it STAYS in Ready for Delivery ("R NOYTO AGER JAYGATEI THAKBE")
+  // Orders with NO 9-digit tracking code in Column K AND NO courier status in Column L,
+  // that have NOT yet been sent to Steadfast
   const unenteredOrders = useMemo(() => {
     return evaluatedOrders.filter((item) => {
       const o = item.order;
       const tracking = String(o.trackingCode || '').trim();
       const has9Digits = /^\d{9}$/.test(tracking);
       const hasStatus = Boolean(o.courierStatus && String(o.courierStatus).trim() !== '');
-      return !has9Digits && !hasStatus;
+
+      // Exclude if already completed with tracking code and status
+      if (has9Digits && hasStatus) return false;
+
+      // Exclude if already sent to Steadfast (it now belongs in Today Entry)
+      if (isOrderSentToSteadfast(o)) return false;
+
+      return true;
     });
-  }, [evaluatedOrders]);
+  }, [evaluatedOrders, todaySentOrderIds]);
 
   // Today Entry list:
-  // "SEKHAN THEKE SEND TO STEADFAST DILA ,, JODI TRAKING CODE AND STATUS ASHE TOKHONI SODO ATA TODAY ENTRY LIST A ADD HOBE,,, R NOYTO AGER JAYGATEI THAKBE"
-  // Strictly requires BOTH 9-digit tracking code AND courier/tracking status, AND entered today
+  // Orders entered into Steadfast today:
+  // 1. Orders sent to Steadfast today (via Send button/toggle in Col M or marked in session/localStorage)
+  // 2. OR orders with both 9-digit tracking code AND courier status entered/dated today
   const todayEntryOrders = useMemo(() => {
     return evaluatedOrders.filter((item) => {
       const o = item.order;
@@ -306,18 +321,22 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
       const has9Digits = /^\d{9}$/.test(tracking);
       const hasStatus = Boolean(o.courierStatus && String(o.courierStatus).trim() !== '');
 
-      // MUST have BOTH 9-digit tracking code AND courier status
-      if (!has9Digits || !hasStatus) {
-        return false;
+      // Sent to Steadfast today
+      if (isOrderSentToSteadfast(o)) {
+        return true;
       }
 
-      // AND must be entered/sent today (either sent today in session/localStorage, or order date is today)
-      const isToday = todaySentOrderIds.has(o.id) || isDateToday(o.date);
-      return isToday;
+      // Or has tracking code & courier status from today
+      if (has9Digits && hasStatus) {
+        return todaySentOrderIds.has(o.id) || isDateToday(o.date);
+      }
+
+      return false;
     });
   }, [evaluatedOrders, todaySentOrderIds]);
 
-  // Orders that are excluded / past historical entries
+  // Orders that are excluded / past historical entries:
+  // Orders that already have tracking code & courier status from past dates (not today), and are not active today
   const excludedOrders = useMemo(() => {
     return evaluatedOrders.filter((item) => {
       const o = item.order;
@@ -325,10 +344,13 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
       const has9Digits = /^\d{9}$/.test(tracking);
       const hasStatus = Boolean(o.courierStatus && String(o.courierStatus).trim() !== '');
 
-      if (has9Digits || hasStatus) {
+      if (isOrderSentToSteadfast(o)) return false;
+
+      if (has9Digits && hasStatus) {
         const isToday = todaySentOrderIds.has(o.id) || isDateToday(o.date);
-        return !(has9Digits && hasStatus && isToday);
+        return !isToday;
       }
+
       return false;
     });
   }, [evaluatedOrders, todaySentOrderIds]);
@@ -426,15 +448,14 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
   // Handle single send or undo
   const handleSingleSend = async (e: React.MouseEvent, order: Order) => {
     e.stopPropagation();
-    const isAlreadySent =
-      String(order.steadfastStatus || '').toLowerCase().includes('send to steadfast');
+    const isAlreadySent = isOrderSentToSteadfast(order);
 
     if (isAlreadySent) {
-      await onToggleSteadfast(order, 'No Sellect');
       removeSentOrders([order.id]);
+      await onToggleSteadfast(order, 'No Sellect');
     } else {
-      await onToggleSteadfast(order, 'send to steadfast');
       recordSentOrders([order.id]);
+      await onToggleSteadfast(order, 'send to steadfast');
     }
   };
 
@@ -445,8 +466,8 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
 
     setIsSendingBatch(true);
     try {
-      await onBatchSendToSteadfast(toSend);
       recordSentOrders(toSend.map((o) => o.id));
+      await onBatchSendToSteadfast(toSend);
       setSelectedOrderIds(new Set());
     } finally {
       setIsSendingBatch(false);
@@ -817,9 +838,7 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
           filteredList.map(({ order, eligibility }, index) => {
             const isSelected = selectedOrderIds.has(order.id);
             const displayAmount = order.total || order.amount || 599;
-            const isAlreadySent =
-              order.steadfastStatus === 'send to steadfast' ||
-              order.steadfastStatus === 'Sent to Steadfast';
+            const isAlreadySent = isOrderSentToSteadfast(order);
 
             return (
               <div
@@ -890,13 +909,26 @@ export const SteadfastView: React.FC<SteadfastViewProps> = ({
                       onClick={(e) => handleSingleSend(e, order)}
                       className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold border transition-all cursor-pointer ${
                         isAlreadySent
-                          ? 'bg-[#1e1b4b] text-[#c7d2fe] border-[#4338ca]'
-                          : 'bg-gradient-to-r from-purple-600 to-pink-600 text-white border-purple-500 shadow-sm'
+                          ? 'bg-[#12281e] text-emerald-300 border-emerald-600/70 shadow-sm hover:bg-[#183528]'
+                          : 'bg-gradient-to-r from-purple-600 to-pink-600 text-white border-purple-500 shadow-sm hover:from-purple-500 hover:to-pink-500'
                       }`}
-                      title="গুগল শিটের M কলামে 'send to steadfast' পাঠান"
+                      title={
+                        isAlreadySent
+                          ? "স্টেডফাস্ট বাতিল করে 'No Sellect' করতে ক্লিক করুন"
+                          : "গুগল শিটের M কলামে 'send to steadfast' পাঠান"
+                      }
                     >
-                      <Send className="w-3 h-3" />
-                      <span>{isAlreadySent ? 'Sent' : 'M: Send'}</span>
+                      {isAlreadySent ? (
+                        <>
+                          <Check className="w-3 h-3 text-emerald-400 stroke-[3]" />
+                          <span>Sent</span>
+                        </>
+                      ) : (
+                        <>
+                          <Send className="w-3 h-3" />
+                          <span>M: Send</span>
+                        </>
+                      )}
                     </button>
                   </div>
                 </div>

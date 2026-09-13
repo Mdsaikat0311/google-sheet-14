@@ -393,7 +393,29 @@ export default function App() {
       const sheetResult = await getSheetOrders(cleanId, targetToken || undefined, targetTab);
 
       if (sheetResult.orders && sheetResult.orders.length > 0) {
-        setOrders(sheetResult.orders);
+        setOrders((prevOrders) => {
+          if (silent) {
+            const prevMap = new Map(prevOrders.map((o) => [o.id, o]));
+            return sheetResult.orders.map((remoteOrder) => {
+              const localOrder = prevMap.get(remoteOrder.id);
+              if (!localOrder) return remoteOrder;
+
+              const localIsSent = String(localOrder.steadfastStatus || '').toLowerCase().includes('send to steadfast');
+              const remoteIsSent = String(remoteOrder.steadfastStatus || '').toLowerCase().includes('send to steadfast');
+              const remoteHasTracking = Boolean(remoteOrder.trackingCode && String(remoteOrder.trackingCode).trim() !== '');
+
+              // If user marked it locally as send to steadfast, preserve it unless remote now has actual tracking code
+              if (localIsSent && !remoteIsSent && !remoteHasTracking) {
+                return {
+                  ...remoteOrder,
+                  steadfastStatus: localOrder.steadfastStatus,
+                };
+              }
+              return remoteOrder;
+            });
+          }
+          return sheetResult.orders;
+        });
         if (!silent) {
           showToast(
             `গুগল শিট (${targetTab}) থেকে ${sheetResult.orders.length} টি অর্ডার সফলভাবে সিঙ্ক হয়েছে!`
@@ -640,10 +662,7 @@ export default function App() {
       );
       showToast(`✅ গুগল শিটে (কলাম M) '${finalSteadfastStatus}' আপডেট হয়েছে!`);
 
-      // Automatically refresh after delay to read fresh Column K and L if Google Sheet has automation
-      setTimeout(() => {
-        syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
-      }, 1500);
+      // Refresh after delay to read fresh Column K and L if Google Sheet has automation
       setTimeout(() => {
         syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
       }, 3500);
@@ -702,9 +721,6 @@ export default function App() {
       showToast(`⚠️ ${successCount}টি সফল, ${failCount}টি ব্যর্থ হয়েছে`, 'error');
     }
 
-    setTimeout(() => {
-      syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
-    }, 1500);
     setTimeout(() => {
       syncWithSheet(spreadsheetId, accessToken, orderSheetTab, true);
     }, 3500);

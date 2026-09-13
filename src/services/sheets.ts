@@ -1310,11 +1310,16 @@ export const updateSheetSteadfastAction = async (
   action: 'send to steadfast' | 'No Sellect' | string,
   orderId?: string
 ) => {
-  if (accessToken && rowIndex > 0) {
+  const cleanId = extractSpreadsheetId(spreadsheetId);
+  const targetTab = tabName || 'Sheet2';
+  const validRow = rowIndex && rowIndex > 1 ? rowIndex : 2;
+
+  if (accessToken && validRow > 0) {
     try {
-      const cellRange = `'${tabName}'!M${rowIndex}`;
+      const safeTab = targetTab.replace(/'/g, "''");
+      const cellRange = `'${safeTab}'!M${validRow}`;
       const res = await fetch(
-        `${SHEETS_API_BASE}/${spreadsheetId}/values/${encodeURIComponent(cellRange)}?valueInputOption=USER_ENTERED`,
+        `${SHEETS_API_BASE}/${cleanId}/values/${encodeURIComponent(cellRange)}?valueInputOption=USER_ENTERED`,
         {
           method: 'PUT',
           headers: {
@@ -1335,12 +1340,13 @@ export const updateSheetSteadfastAction = async (
     }
   }
 
-  // Fallback to Apps Script: only passes courier_action (Column M), preserving K & L
+  // Fallback to Apps Script: passes courier_action (Column M), preserving K & L
   return updateOrderViaAppsScript({
-    action: 'update',
-    row_number: rowIndex,
-    row: rowIndex,
-    rowIndex: rowIndex,
+    action: 'update_order',
+    action_type: 'update_order',
+    row_number: validRow,
+    row: validRow,
+    rowIndex: validRow,
     id: orderId,
     orderId: orderId,
     courier_action: action,
@@ -1349,6 +1355,9 @@ export const updateSheetSteadfastAction = async (
     column: 'M',
     col: 13,
     value: action,
+    sheetName: targetTab,
+    tabName: targetTab,
+    sheet: targetTab,
   });
 };
 
